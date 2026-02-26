@@ -18,30 +18,50 @@ class HomeworkStates(StatesGroup):
 # Файл для хранения данных
 DATA_FILE = 'homework_data.json'
 
-# Загрузка данных с фильтром по пользователю
+# Загрузка данных для конкретного пользователя
 def load_user_data(user_id):
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            all_data = json.load(f)
-            # Возвращаем данные только для конкретного пользователя
-            return all_data.get(str(user_id), {})
-    return {}
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if content.strip():  # Проверяем, не пустой ли файл
+                    all_data = json.loads(content)
+                    return all_data.get(str(user_id), {})
+                else:
+                    return {}
+        return {}
+    except json.JSONDecodeError:
+        # Если файл поврежден, создаем новый
+        return {}
+    except Exception as e:
+        print(f"Ошибка при загрузке данных: {e}")
+        return {}
 
 # Сохранение данных для конкретного пользователя
 def save_user_data(user_id, user_data):
-    # Загружаем все данные
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            all_data = json.load(f)
-    else:
-        all_data = {}
-    
-    # Обновляем данные для пользователя
-    all_data[str(user_id)] = user_data
-    
-    # Сохраняем все данные
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(all_data, f, ensure_ascii=False, indent=4)
+    try:
+        # Загружаем все данные
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if content.strip():
+                    all_data = json.loads(content)
+                else:
+                    all_data = {}
+        else:
+            all_data = {}
+        
+        # Обновляем данные для пользователя
+        all_data[str(user_id)] = user_data
+        
+        # Сохраняем все данные
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(all_data, f, ensure_ascii=False, indent=4)
+        
+        return True
+    except Exception as e:
+        print(f"Ошибка при сохранении данных: {e}")
+        return False
 
 # Клавиатура с кнопкой стоп
 def get_stop_keyboard():
@@ -82,14 +102,13 @@ async def cmd_start(message: types.Message):
     user_name = message.from_user.first_name
     
     await message.answer(
-        f"👋 Привет, {user_name}! (ID: {user_id})\n\n"
-        "Я бот для отслеживания домашних заданий.\n"
-        "📝 *Важно:* У каждого пользователя свой личный список ДЗ!\n\n"
+        f"👋 Привет, {user_name}!\n\n"
+        "📝 *У каждого пользователя свой личный список ДЗ*\n\n"
         "Что я умею:\n"
-        "📝 Добавлять домашние задания по датам\n"
-        "📋 Показывать ваш личный список заданий\n"
-        "🗑️ Очищать ваши задания\n"
-        "❓ Помощь по командам\n\n"
+        "• 📝 Добавлять домашние задания\n"
+        "• 📋 Показывать ваш список\n"
+        "• 🗑️ Очищать ваши задания\n"
+        "• ❓ Помощь\n\n"
         "Выберите действие:",
         parse_mode="Markdown",
         reply_markup=get_main_keyboard()
@@ -100,30 +119,18 @@ async def cmd_start(message: types.Message):
 @router.message(Command("help"))
 async def cmd_help(message: types.Message):
     help_text = (
-        "📚 *Команды бота:*\n\n"
-        "/start - Запустить бота\n"
-        "/list - Показать ваш список ДЗ\n"
-        "/clear - Очистить ваши задания\n"
-        "/help - Показать это сообщение\n"
-        "/myid - Показать ваш ID\n\n"
-        "*Как пользоваться:*\n"
+        "📚 *Как пользоваться ботом:*\n\n"
         "1️⃣ Нажмите '📝 Добавить ДЗ'\n"
         "2️⃣ Введите дату (например: 26.02.2026)\n"
         "3️⃣ Вводите задания по одному\n"
-        "4️⃣ Когда закончите, нажмите '⛔ Стоп'\n\n"
-        "*Важно:* У каждого пользователя свой личный список!"
+        "4️⃣ Нажмите '⛔ Стоп' для сохранения\n\n"
+        "📋 *Другие команды:*\n"
+        "• /list - показать ваш список\n"
+        "• /clear - очистить задания\n"
+        "• /help - эта помощь\n\n"
+        "🔒 *Важно:* Каждый видит только свои задания!"
     )
     await message.answer(help_text, parse_mode="Markdown", reply_markup=get_main_keyboard())
-
-# Показать свой ID
-@router.message(lambda message: message.text == "/myid")
-@router.message(Command("myid"))
-async def show_my_id(message: types.Message):
-    await message.answer(
-        f"🆔 *Ваш ID:* `{message.from_user.id}`\n\n"
-        "Этот ID используется для разделения данных между пользователями.",
-        parse_mode="Markdown"
-    )
 
 # Начало добавления ДЗ
 @router.message(lambda message: message.text == "📝 Добавить ДЗ")
@@ -146,18 +153,18 @@ async def process_date(message: types.Message, state: FSMContext):
     
     try:
         # Проверка формата даты
-        date = datetime.strptime(message.text, "%d.%m.%Y").date()
+        datetime.strptime(message.text, "%d.%m.%Y")
         
-        # Сохраняем дату в состояние и инициализируем список заданий
+        # Сохраняем дату
         await state.update_data(date=message.text, homework_items=[])
         await state.set_state(HomeworkStates.waiting_for_homework)
         
         await message.answer(
-            f"📝 Вводите домашние задания для {message.text}\n\n"
-            "Просто пишите предмет и задание, например:\n"
+            f"📝 Вводите задания для {message.text}\n\n"
+            "Пример:\n"
             "Математика: стр. 45, №123\n"
             "УПС та ПНШВ: прочитать параграф 5\n\n"
-            "Когда закончите, нажмите '⛔ Стоп' для сохранения",
+            "Когда закончите, нажмите '⛔ Стоп'",
             reply_markup=get_stop_keyboard()
         )
     except ValueError:
@@ -167,11 +174,11 @@ async def process_date(message: types.Message, state: FSMContext):
             "Например: 26.02.2026"
         )
 
-# Обработка списка ДЗ
+# Обработка заданий
 @router.message(HomeworkStates.waiting_for_homework)
 async def process_homework(message: types.Message, state: FSMContext):
     if message.text == "⛔ Стоп":
-        # Сохраняем данные
+        # Получаем данные
         data = await state.get_data()
         date = data.get('date')
         homework_items = data.get('homework_items', [])
@@ -186,28 +193,31 @@ async def process_homework(message: types.Message, state: FSMContext):
             user_id = message.from_user.id
             user_homework = load_user_data(user_id)
             
-            # Сохраняем новое ДЗ
+            # Сохраняем
             user_homework[date] = numbered_list.strip()
-            save_user_data(user_id, user_homework)
             
-            await message.answer(
-                f"✅ Домашнее задание на {date} сохранено в ваш личный список!",
-                reply_markup=get_main_keyboard()
-            )
+            if save_user_data(user_id, user_homework):
+                await message.answer(
+                    f"✅ Задания на {date} сохранены!",
+                    reply_markup=get_main_keyboard()
+                )
+            else:
+                await message.answer(
+                    "❌ Ошибка при сохранении",
+                    reply_markup=get_main_keyboard()
+                )
         else:
             await message.answer(
-                "❌ Нет данных для сохранения",
+                "❌ Нет заданий для сохранения",
                 reply_markup=get_main_keyboard()
             )
         
         await state.clear()
         return
     
-    # Получаем текущие данные из состояния
+    # Добавляем задание
     data = await state.get_data()
     homework_items = data.get('homework_items', [])
-    
-    # Добавляем новое задание
     homework_items.append(message.text)
     await state.update_data(homework_items=homework_items)
     
@@ -217,67 +227,66 @@ async def process_homework(message: types.Message, state: FSMContext):
         current_list += f"{i}. {item}\n"
     
     await message.answer(
-        f"✅ Задание добавлено!\n\n"
-        f"*Текущий список:*\n{current_list}\n"
-        f"Продолжайте или нажмите '⛔ Стоп' для сохранения",
-        parse_mode="Markdown",
+        f"✅ Добавлено!\n\nТекущий список:\n{current_list}",
         reply_markup=get_stop_keyboard()
     )
 
-# Показать весь список
+# Показать список пользователя
 @router.message(lambda message: message.text == "📋 Показать весь список")
 @router.message(Command("list"))
-async def show_all_homework(message: types.Message):
+async def show_user_homework(message: types.Message):
     user_id = message.from_user.id
     user_homework = load_user_data(user_id)
     
     if not user_homework:
         await message.answer(
-            "📭 Ваш список домашних заданий пуст",
+            "📭 Ваш список пуст",
             reply_markup=get_main_keyboard()
         )
         return
     
-    # Формируем сообщение
-    response = f"📚 *ВАШИ ДОМАШНИЕ ЗАДАНИЯ*\n\n"
+    # Формируем ответ
+    response = "📚 *ВАШИ ЗАДАНИЯ*\n\n"
     
     # Сортируем по дате
-    sorted_dates = sorted(user_homework.keys(), 
-                         key=lambda x: datetime.strptime(x, "%d.%m.%Y"), 
-                         reverse=True)
+    try:
+        sorted_dates = sorted(user_homework.keys(), 
+                            key=lambda x: datetime.strptime(x, "%d.%m.%Y"), 
+                            reverse=True)
+    except:
+        sorted_dates = user_homework.keys()
     
     for date in sorted_dates:
-        response += f"📅 *{date}:*\n"
-        response += f"{user_homework[date]}\n\n"
+        response += f"📅 *{date}:*\n{user_homework[date]}\n\n"
     
     # Отправляем
-    if len(response) > 4000:
-        parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
-        for part in parts:
-            await message.answer(part, parse_mode="Markdown")
-    else:
-        await message.answer(response, parse_mode="Markdown", reply_markup=get_main_keyboard())
+    await message.answer(response, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
-# Очистка (аналогично обновить для работы с user_id)
+# Очистка
 @router.message(lambda message: message.text == "🗑️ Очистить")
 @router.message(Command("clear"))
 async def clear_menu(message: types.Message, state: FSMContext):
     await message.answer(
-        "🗑️ *Выберите тип очистки ВАШИХ заданий:*\n\n"
-        "• '🧹 Очистить всё' - удалит ВСЕ ваши задания\n"
-        "• '📅 Удалить по дате' - удалит задания за конкретную дату",
+        "🗑️ *Очистка ваших заданий:*\n\n"
+        "🧹 Очистить всё - удалить все\n"
+        "📅 Удалить по дате - удалить за конкретную дату",
         parse_mode="Markdown",
         reply_markup=get_clear_keyboard()
     )
 
 @router.message(lambda message: message.text == "🧹 Очистить всё")
-async def clear_all(message: types.Message, state: FSMContext):
+async def clear_all(message: types.Message):
     user_id = message.from_user.id
-    save_user_data(user_id, {})
-    await message.answer(
-        "✅ Все ваши домашние задания успешно удалены!",
-        reply_markup=get_main_keyboard()
-    )
+    if save_user_data(user_id, {}):
+        await message.answer(
+            "✅ Все ваши задания удалены!",
+            reply_markup=get_main_keyboard()
+        )
+    else:
+        await message.answer(
+            "❌ Ошибка при удалении",
+            reply_markup=get_main_keyboard()
+        )
 
 @router.message(lambda message: message.text == "📅 Удалить по дате")
 async def clear_by_date_start(message: types.Message, state: FSMContext):
@@ -286,21 +295,17 @@ async def clear_by_date_start(message: types.Message, state: FSMContext):
     
     if not user_homework:
         await message.answer(
-            "📭 Ваш список домашних заданий пуст. Нечего удалять.",
+            "📭 Ваш список пуст",
             reply_markup=get_main_keyboard()
         )
         return
     
-    # Показываем доступные даты
-    response = "📅 *Ваши доступные даты:*\n\n"
-    sorted_dates = sorted(user_homework.keys(), 
-                         key=lambda x: datetime.strptime(x, "%d.%m.%Y"), 
-                         reverse=True)
-    
-    for date in sorted_dates:
+    # Показываем даты
+    response = "📅 *Ваши даты:*\n\n"
+    for date in user_homework.keys():
         response += f"• {date}\n"
     
-    response += "\n✏️ Введите дату, которую хотите удалить:"
+    response += "\n✏️ Введите дату для удаления:"
     
     await state.set_state(HomeworkStates.waiting_for_delete_date)
     await message.answer(response, parse_mode="Markdown", reply_markup=get_stop_keyboard())
@@ -309,27 +314,31 @@ async def clear_by_date_start(message: types.Message, state: FSMContext):
 async def process_delete_by_date(message: types.Message, state: FSMContext):
     if message.text == "⛔ Стоп":
         await state.clear()
-        await message.answer("❌ Удаление отменено", reply_markup=get_main_keyboard())
+        await message.answer("❌ Отменено", reply_markup=get_main_keyboard())
         return
     
     try:
         date_str = message.text
-        datetime.strptime(date_str, "%d.%m.%Y")  # Проверка формата
+        datetime.strptime(date_str, "%d.%m.%Y")
         
         user_id = message.from_user.id
         user_homework = load_user_data(user_id)
         
         if date_str in user_homework:
-            deleted_item = user_homework.pop(date_str)
-            save_user_data(user_id, user_homework)
-            
-            await message.answer(
-                f"✅ Задания за {date_str} удалены из вашего списка!",
-                reply_markup=get_main_keyboard()
-            )
+            del user_homework[date_str]
+            if save_user_data(user_id, user_homework):
+                await message.answer(
+                    f"✅ Задания за {date_str} удалены!",
+                    reply_markup=get_main_keyboard()
+                )
+            else:
+                await message.answer(
+                    "❌ Ошибка при удалении",
+                    reply_markup=get_main_keyboard()
+                )
         else:
             await message.answer(
-                f"❌ Заданий за {date_str} не найдено в вашем списке",
+                f"❌ Даты {date_str} нет в вашем списке",
                 reply_markup=get_main_keyboard()
             )
         
@@ -338,24 +347,19 @@ async def process_delete_by_date(message: types.Message, state: FSMContext):
     except ValueError:
         await message.answer(
             "❌ Неправильный формат даты!\n"
-            "Введите дату в формате ДД.ММ.ГГГГ"
+            "Используйте ДД.ММ.ГГГГ"
         )
 
-# Обработка кнопки стоп
+# Кнопка стоп
 @router.message(lambda message: message.text == "⛔ Стоп")
 async def stop_action(message: types.Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state is not None:
-        await state.clear()
-        await message.answer("⏹️ Действие отменено", reply_markup=get_main_keyboard())
-    else:
-        await message.answer("Нет активных действий", reply_markup=get_main_keyboard())
+    await state.clear()
+    await message.answer("⏹️ Действие отменено", reply_markup=get_main_keyboard())
 
-# Обработка неизвестных команд
+# Все остальное
 @router.message()
 async def unknown_message(message: types.Message):
     await message.answer(
-        "Я не понимаю эту команду.\n"
-        "Используйте /start или /help",
+        "Используйте кнопки меню",
         reply_markup=get_main_keyboard()
     )
