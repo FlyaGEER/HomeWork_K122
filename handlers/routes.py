@@ -13,6 +13,8 @@ router = Router()
 class HomeworkStates(StatesGroup):
     waiting_for_date = State()
     waiting_for_homework = State()
+    waiting_for_continue_date = State()  # Новое состояние для выбора даты продолжения
+    waiting_for_continue_homework = State()  # Новое состояние для продолжения ввода
     waiting_for_delete_date = State()
     waiting_for_select_task_to_delete = State()  # Выбор даты для удаления конкретного задания
     waiting_for_task_number = State()  # Номер задания для удаления
@@ -77,10 +79,10 @@ def get_stop_keyboard():
 def get_main_keyboard():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📝 Добавить ДЗ")],
+            [KeyboardButton(text="📝 Добавить ДЗ"), KeyboardButton(text="➕ Продолжить ввод")],
             [KeyboardButton(text="📋 Показать весь список")],
             [KeyboardButton(text="🗑️ Очистить"), KeyboardButton(text="❓ Помощь")],
-            [KeyboardButton(text="✏️ Удалить задание")]  # Новая кнопка
+            [KeyboardButton(text="✏️ Удалить задание")]
         ],
         resize_keyboard=True
     )
@@ -109,6 +111,7 @@ async def cmd_start(message: types.Message):
         "📝 *У каждого пользователя свой личный список ДЗ*\n\n"
         "Что я умею:\n"
         "• 📝 Добавлять домашние задания\n"
+        "• ➕ Продолжить ввод в существующую дату\n"
         "• 📋 Показывать ваш список\n"
         "• ✏️ Удалять конкретное задание\n"
         "• 🗑️ Очищать все задания или по дате\n"
@@ -128,6 +131,11 @@ async def cmd_help(message: types.Message):
         "2️⃣ Введите дату (например: 26.02.2026)\n"
         "3️⃣ Вводите задания по одному\n"
         "4️⃣ Нажмите '⛔ Стоп' для сохранения\n\n"
+        "➕ *Продолжить ввод:*\n"
+        "• Нажмите '➕ Продолжить ввод'\n"
+        "• Выберите дату\n"
+        "• Добавляйте новые задания\n"
+        "• Они автоматически добавятся в конец списка\n\n"
         "✏️ *Удаление конкретного задания:*\n"
         "• Нажмите '✏️ Удалить задание'\n"
         "• Выберите дату\n"
@@ -236,6 +244,171 @@ async def process_homework(message: types.Message, state: FSMContext):
     
     await message.answer(
         f"✅ Добавлено!\n\nТекущий список:\n{current_list}",
+        reply_markup=get_stop_keyboard()
+    )
+
+# Продолжить ввод заданий
+@router.message(lambda message: message.text == "➕ Продолжить ввод")
+async def continue_homework_start(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_homework = load_user_data(user_id)
+    
+    if not user_homework:
+        await message.answer(
+            "📭 У вас пока нет ни одной даты с заданиями.\n"
+            "Сначала добавьте задания через '📝 Добавить ДЗ'",
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    # Показываем даты для выбора
+    response = "📅 *Выберите дату для продолжения:*\n\n"
+    
+    # Сортируем даты
+    try:
+        sorted_dates = sorted(user_homework.keys(), 
+                            key=lambda x: datetime.strptime(x, "%d.%m.%Y"), 
+                            reverse=True)
+    except:
+        sorted_dates = user_homework.keys()
+    
+    for date in sorted_dates:
+        response += f"• {date}\n"
+    
+    response += "\n✏️ Введите дату, чтобы добавить ещё задания:"
+    
+    await state.set_state(HomeworkStates.waiting_for_continue_date)
+    await message.answer(response, parse_mode="Markdown", reply_markup=get_stop_keyboard())
+
+@router.message(HomeworkStates.waiting_for_continue_date)
+async def process_continue_date(message: types.Message, state: FSMContext):
+    if message.text == "⛔ Стоп":
+        await state.clear()
+        await message.answer("❌ Продолжение отменено", reply_markup=get_main_keyboard())
+        return
+    
+    try:
+        # Проверка формата даты
+        datetime.strptime(message.text, "%d.%m.%Y")
+        date_str = message.text
+        
+        user_id = message.from_user.id
+        user_homework = load_user_data(user_id)
+        
+        if date_str in user_homework:
+            # Показываем текущие задания
+            tasks_text = user_homework[date_str]
+            tasks_list = tasks_text.strip().split('\n')
+            
+            response = f"📅 *Текущие задания на {date_str}:*\n\n"
+            for task in tasks_list:
+                response += f"{task}\n"
+            
+            # Получаем количество существующих заданий
+            existing_count = len(tasks_list)
+            
+            # Сохраняем данные в состоянии
+            await state.update_data(
+                date=date_str, 
+                homework_items=[],
+                existing_count=existing_count
+            )
+            
+            await state.set_state(HomeworkStates.waiting_for_continue_homework)
+            
+            await message.answer(
+                f"{response}\n\n"
+                f"➕ *Добавьте новые задания*\n"
+                f"Они будут добавлены после существующих (начиная с номера {existing_count + 1})\n\n"
+                f"Вводите задания по одному. Когда закончите, нажмите '⛔ Стоп'",
+                parse_mode="Markdown",
+                reply_markup=get_stop_keyboard()
+            )
+        else:
+            await message.answer(
+                f"❌ Даты {date_str} нет в вашем списке!\n"
+                f"Введите дату из списка выше",
+                reply_markup=get_stop_keyboard()
+            )
+        
+    except ValueError:
+        await message.answer(
+            "❌ Неправильный формат даты!\n"
+            "Введите дату в формате ДД.ММ.ГГГГ\n"
+            "Например: 26.02.2026"
+        )
+
+@router.message(HomeworkStates.waiting_for_continue_homework)
+async def process_continue_homework(message: types.Message, state: FSMContext):
+    if message.text == "⛔ Стоп":
+        # Получаем данные
+        data = await state.get_data()
+        date = data.get('date')
+        homework_items = data.get('homework_items', [])
+        existing_count = data.get('existing_count', 0)
+        
+        if homework_items:
+            # Загружаем данные пользователя
+            user_id = message.from_user.id
+            user_homework = load_user_data(user_id)
+            
+            # Получаем существующие задания
+            existing_tasks = user_homework.get(date, "")
+            existing_list = existing_tasks.strip().split('\n') if existing_tasks else []
+            
+            # Добавляем новые задания
+            for item in homework_items:
+                # Убираем возможные старые номера из текста
+                clean_item = item.split('. ', 1)[-1] if '. ' in item else item
+                existing_list.append(clean_item)
+            
+            # Переиндексируем все задания
+            new_tasks_text = ""
+            for i, task in enumerate(existing_list, 1):
+                new_tasks_text += f"{i}. {task}\n"
+            
+            # Сохраняем
+            user_homework[date] = new_tasks_text.strip()
+            
+            if save_user_data(user_id, user_homework):
+                # Показываем итоговый список
+                response = f"📅 *Обновленные задания на {date}:*\n\n"
+                for i, task in enumerate(existing_list, 1):
+                    response += f"{i}. {task}\n"
+                
+                await message.answer(
+                    f"✅ Добавлено {len(homework_items)} новых заданий!\n\n{response}",
+                    parse_mode="Markdown",
+                    reply_markup=get_main_keyboard()
+                )
+            else:
+                await message.answer(
+                    "❌ Ошибка при сохранении",
+                    reply_markup=get_main_keyboard()
+                )
+        else:
+            await message.answer(
+                "❌ Нет новых заданий для добавления",
+                reply_markup=get_main_keyboard()
+            )
+        
+        await state.clear()
+        return
+    
+    # Добавляем задание
+    data = await state.get_data()
+    homework_items = data.get('homework_items', [])
+    existing_count = data.get('existing_count', 0)
+    homework_items.append(message.text)
+    await state.update_data(homework_items=homework_items)
+    
+    # Показываем текущий список новых заданий
+    current_list = ""
+    for i, item in enumerate(homework_items, 1):
+        current_list += f"{existing_count + i}. {item}\n"
+    
+    await message.answer(
+        f"✅ Добавлено!\n\nНовые задания (будут добавлены после существующих):\n{current_list}",
         reply_markup=get_stop_keyboard()
     )
 
