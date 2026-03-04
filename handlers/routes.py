@@ -14,6 +14,8 @@ class HomeworkStates(StatesGroup):
     waiting_for_date = State()
     waiting_for_homework = State()
     waiting_for_delete_date = State()
+    waiting_for_select_task_to_delete = State()  # Выбор даты для удаления конкретного задания
+    waiting_for_task_number = State()  # Номер задания для удаления
 
 # Файл для хранения данных
 DATA_FILE = 'homework_data.json'
@@ -77,7 +79,8 @@ def get_main_keyboard():
         keyboard=[
             [KeyboardButton(text="📝 Добавить ДЗ")],
             [KeyboardButton(text="📋 Показать весь список")],
-            [KeyboardButton(text="🗑️ Очистить"), KeyboardButton(text="❓ Помощь")]
+            [KeyboardButton(text="🗑️ Очистить"), KeyboardButton(text="❓ Помощь")],
+            [KeyboardButton(text="✏️ Удалить задание")]  # Новая кнопка
         ],
         resize_keyboard=True
     )
@@ -107,7 +110,8 @@ async def cmd_start(message: types.Message):
         "Что я умею:\n"
         "• 📝 Добавлять домашние задания\n"
         "• 📋 Показывать ваш список\n"
-        "• 🗑️ Очищать ваши задания\n"
+        "• ✏️ Удалять конкретное задание\n"
+        "• 🗑️ Очищать все задания или по дате\n"
         "• ❓ Помощь\n\n"
         "Выберите действие:",
         parse_mode="Markdown",
@@ -124,6 +128,10 @@ async def cmd_help(message: types.Message):
         "2️⃣ Введите дату (например: 26.02.2026)\n"
         "3️⃣ Вводите задания по одному\n"
         "4️⃣ Нажмите '⛔ Стоп' для сохранения\n\n"
+        "✏️ *Удаление конкретного задания:*\n"
+        "• Нажмите '✏️ Удалить задание'\n"
+        "• Выберите дату\n"
+        "• Выберите номер задания для удаления\n\n"
         "📋 *Другие команды:*\n"
         "• /list - показать ваш список\n"
         "• /clear - очистить задания\n"
@@ -261,6 +269,147 @@ async def show_user_homework(message: types.Message):
     
     # Отправляем
     await message.answer(response, parse_mode="Markdown", reply_markup=get_main_keyboard())
+
+# Удаление конкретного задания
+@router.message(lambda message: message.text == "✏️ Удалить задание")
+async def delete_task_start(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_homework = load_user_data(user_id)
+    
+    if not user_homework:
+        await message.answer(
+            "📭 Ваш список пуст",
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    # Показываем даты для выбора
+    response = "📅 *Выберите дату:*\n\n"
+    
+    # Сортируем даты
+    try:
+        sorted_dates = sorted(user_homework.keys(), 
+                            key=lambda x: datetime.strptime(x, "%d.%m.%Y"), 
+                            reverse=True)
+    except:
+        sorted_dates = user_homework.keys()
+    
+    for date in sorted_dates:
+        response += f"• {date}\n"
+    
+    response += "\n✏️ Введите дату, из которой хотите удалить задание:"
+    
+    await state.set_state(HomeworkStates.waiting_for_select_task_to_delete)
+    await message.answer(response, parse_mode="Markdown", reply_markup=get_stop_keyboard())
+
+@router.message(HomeworkStates.waiting_for_select_task_to_delete)
+async def process_select_date_for_task_delete(message: types.Message, state: FSMContext):
+    if message.text == "⛔ Стоп":
+        await state.clear()
+        await message.answer("❌ Отменено", reply_markup=get_main_keyboard())
+        return
+    
+    try:
+        date_str = message.text
+        datetime.strptime(date_str, "%d.%m.%Y")
+        
+        user_id = message.from_user.id
+        user_homework = load_user_data(user_id)
+        
+        if date_str in user_homework:
+            # Сохраняем дату в состоянии
+            await state.update_data(delete_date=date_str)
+            
+            # Показываем задания для этой даты
+            tasks_text = user_homework[date_str]
+            tasks_list = tasks_text.strip().split('\n')
+            
+            response = f"📅 *Задания на {date_str}:*\n\n"
+            for i, task in enumerate(tasks_list, 1):
+                response += f"{task}\n"
+            
+            response += f"\n🔢 Введите *номер* задания для удаления (от 1 до {len(tasks_list)}):"
+            
+            await state.set_state(HomeworkStates.waiting_for_task_number)
+            await message.answer(response, parse_mode="Markdown", reply_markup=get_stop_keyboard())
+        else:
+            await message.answer(
+                f"❌ Даты {date_str} нет в вашем списке",
+                reply_markup=get_main_keyboard()
+            )
+            await state.clear()
+        
+    except ValueError:
+        await message.answer(
+            "❌ Неправильный формат даты!\n"
+            "Используйте ДД.ММ.ГГГГ"
+        )
+
+@router.message(HomeworkStates.waiting_for_task_number)
+async def process_task_number_delete(message: types.Message, state: FSMContext):
+    if message.text == "⛔ Стоп":
+        await state.clear()
+        await message.answer("❌ Отменено", reply_markup=get_main_keyboard())
+        return
+    
+    try:
+        task_number = int(message.text)
+        data = await state.get_data()
+        date_str = data.get('delete_date')
+        
+        user_id = message.from_user.id
+        user_homework = load_user_data(user_id)
+        
+        if date_str in user_homework:
+            tasks_text = user_homework[date_str]
+            tasks_list = tasks_text.strip().split('\n')
+            
+            if 1 <= task_number <= len(tasks_list):
+                # Удаляем задание
+                deleted_task = tasks_list[task_number - 1]
+                tasks_list.pop(task_number - 1)
+                
+                if tasks_list:
+                    # Переиндексируем оставшиеся задания
+                    new_tasks_text = ""
+                    for i, task in enumerate(tasks_list, 1):
+                        # Убираем старый номер и добавляем новый
+                        task_text = task.split('. ', 1)[-1] if '. ' in task else task
+                        new_tasks_text += f"{i}. {task_text}\n"
+                    user_homework[date_str] = new_tasks_text.strip()
+                else:
+                    # Если заданий не осталось, удаляем всю дату
+                    del user_homework[date_str]
+                
+                if save_user_data(user_id, user_homework):
+                    await message.answer(
+                        f"✅ Задание удалено:\n"
+                        f"*{deleted_task}*",
+                        parse_mode="Markdown",
+                        reply_markup=get_main_keyboard()
+                    )
+                else:
+                    await message.answer(
+                        "❌ Ошибка при удалении",
+                        reply_markup=get_main_keyboard()
+                    )
+            else:
+                await message.answer(
+                    f"❌ Неправильный номер! Введите число от 1 до {len(tasks_list)}"
+                )
+                return
+        else:
+            await message.answer(
+                "❌ Ошибка: дата не найдена",
+                reply_markup=get_main_keyboard()
+            )
+        
+        await state.clear()
+        
+    except ValueError:
+        await message.answer(
+            "❌ Введите число!"
+        )
 
 # Очистка
 @router.message(lambda message: message.text == "🗑️ Очистить")
